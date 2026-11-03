@@ -1,0 +1,42 @@
+name: Independent VM polling origin validation
+on:
+  push:
+    branches: [validation/vm-origin-review]
+    paths: [.github/workflows/vm-origin-review.yml, tools/vm-origin-review.py]
+permissions:
+  contents: read
+jobs:
+  validate:
+    if: github.repository == 'Mohammad-Maraqa/floci-az' && github.event.repository.private == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      MAVEN_OPTS: -Xmx1024m
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Exact source provenance and isolated Python prerequisites
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = 40e790c3673f1ea8e4d5cea1bedd0a198d69ba40
+          git diff --exit-code HEAD^ HEAD -- src pom.xml .mvn mvnw mvnw.cmd docs
+          git rev-parse HEAD
+          java -version
+          python3 -m venv "$RUNNER_TEMP/vm-origin-venv"
+          "$RUNNER_TEMP/vm-origin-venv/bin/pip" install --disable-pip-version-check --only-binary=:all: pytest==9.2.0 requests==2.34.2 azure-core==1.41.0
+      - name: Full repository suite and JVM package
+        run: timeout 32m ./mvnw -B -ntp package '-DargLine=-Xmx3g'
+      - name: Existing VM REST suite and actual Azure Core polling on loopback
+        run: timeout --signal=TERM --kill-after=45s 5m "$RUNNER_TEMP/vm-origin-venv/bin/python" tools/vm-origin-review.py
+      - name: Preserve nonsecret evidence in job logs
+        if: always()
+        run: |
+          free -m
+          if test -f vm-origin-jvm.log; then tail -n 100 vm-origin-jvm.log; fi
+          if test -d target/surefire-reports; then grep -h 'Tests run:' target/surefire-reports/*.txt; fi
